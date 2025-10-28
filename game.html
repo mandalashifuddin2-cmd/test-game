@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Three.js Runner Game (Module Version)</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+      font-family: system-ui, sans-serif;
+      color: #fff;
+    }
+
+    #hud {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0,0,0,0.5);
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 14px;
+      line-height: 1.4;
+      white-space: pre-line;
+      user-select: none;
+      color: #fff;
+    }
+
+    #gameOver {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.8);
+      padding: 20px 30px;
+      border-radius: 8px;
+      font-size: 20px;
+      line-height: 1.5;
+      text-align: center;
+      display: none;
+      user-select: none;
+      color: #fff;
+    }
+
+    #errorBox {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(255,0,0,0.15);
+      border: 1px solid rgba(255,0,0,0.5);
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      line-height: 1.4;
+      color: #ff8080;
+      max-width: 360px;
+      display: none;
+      white-space: pre-line;
+      user-select: text;
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">Loading...</div>
+  <div id="gameOver"></div>
+  <div id="errorBox"></div>
+
+  <!-- Main game script as a module -->
+  <script type="module">
+    // IMPORTANT:
+    // We're importing Three.js as a module from the local file you downloaded.
+    import * as THREE from './three.module.js';
+
+    // We'll wrap the game in a function so we can catch errors and show them in-page.
+    (function startGame() {
+      const hud = document.getElementById('hud');
+      const gameOverBox = document.getElementById('gameOver');
+      const errorBox = document.getElementById('errorBox');
+
+      try {
+        /********************
+         * 1. BASIC THREE SETUP
+         ********************/
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x202020);
+
+        const camera = new THREE.PerspectiveCamera(
+          75,
+          window.innerWidth / window.innerHeight,
+          0.1,
+          1000
+        );
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        /********************
+         * 2. LIGHTS
+         ********************/
+        const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(ambient);
+
+        const sun = new THREE.DirectionalLight(0xffffff, 1.0);
+        sun.position.set(5,10,5);
+        sun.castShadow = true;
+        sun.shadow.mapSize.width = 1024;
+        sun.shadow.mapSize.height = 1024;
+        scene.add(sun);
+
+        /********************
+         * 3. FLOOR / TRACK
+         ********************/
+        const floorGeo = new THREE.PlaneGeometry(20, 200);
+        const floorMat = new THREE.MeshStandardMaterial({
+          color: 0x222244,
+          roughness: 0.9,
+          metalness: 0.0
+        });
+        const floor = new THREE.Mesh(floorGeo, floorMat);
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        floor.position.z = -80;
+        scene.add(floor);
+
+        /********************
+         * 4. PLAYER
+         ********************/
+        const playerGeo = new THREE.BoxGeometry(1,1,1);
+        const playerMat = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+        const player = new THREE.Mesh(playerGeo, playerMat);
+        player.castShadow = true;
+        player.position.set(0,0.5,4); // a little in front of the camera
+        scene.add(player);
+
+        /********************
+         * 5. CAMERA POSITION
+         ********************/
+        camera.position.set(0,4,10);
+        camera.lookAt(player.position.x, player.position.y, player.position.z - 10);
+
+        /********************
+         * 6. GAME STATE
+         ********************/
+        const keys = { a:false, d:false, r:false };
+        let obstacles = [];
+        let lastSpawnTime = 0;
+        let spawnInterval = 1000; // ms between new obstacles
+        let speed = 0.1;          // scroll speed
+        let score = 0;
+        let isGameOver = false;
+
+        /********************
+         * 7. INPUT HANDLERS
+         ********************/
+        window.addEventListener('keydown', (e)=>{
+          const k = e.key.toLowerCase();
+          if (k === 'a') keys.a = true;
+          if (k === 'd') keys.d = true;
+          if (k === 'r') keys.r = true;
+        });
+
+        window.addEventListener('keyup', (e)=>{
+          const k = e.key.toLowerCase();
+          if (k === 'a') keys.a = false;
+          if (k === 'd') keys.d = false;
+          if (k === 'r') keys.r = false;
+        });
+
+        /********************
+         * 8. SPAWN OBSTACLES
+         ********************/
+        function createObstacle() {
+          // Random size
+          const width = 1 + Math.random()*1.5;
+          const height = 1 + Math.random()*2;
+          const depth = 1 + Math.random()*1.5;
+
+          // Mesh
+          const geo = new THREE.BoxGeometry(width,height,depth);
+          const mat = new THREE.MeshStandardMaterial({ color: 0xff3333 });
+          const box = new THREE.Mesh(geo, mat);
+
+          box.castShadow = true;
+          box.receiveShadow = true;
+
+          // Lanes: left / center / right
+          const lanes = [-4, 0, 4];
+          const laneX = lanes[Math.floor(Math.random()*lanes.length)];
+
+          // Appear far "ahead" (negative Z)
+          box.position.set(laneX, height/2, -50);
+          scene.add(box);
+
+          obstacles.push(box);
+        }
+
+        /********************
+         * 9. RESET GAME
+         ********************/
+        function resetGame() {
+          for (const ob of obstacles) {
+            scene.remove(ob);
+          }
+          obstacles = [];
+
+          player.position.x = 0;
+          player.position.z = 4;
+
+          score = 0;
+          speed = 0.1;
+          lastSpawnTime = performance.now();
+          spawnInterval = 1000;
+          isGameOver = false;
+          gameOverBox.style.display = 'none';
+        }
+
+        /********************
+         * 10. COLLISION CHECK
+         * AABB overlap (axis-aligned bounding boxes)
+         ********************/
+        function isColliding(a, b) {
+          a.geometry.computeBoundingBox();
+          b.geometry.computeBoundingBox();
+
+          const abox = a.geometry.boundingBox.clone();
+          const bbox = b.geometry.boundingBox.clone();
+
+          abox.min.add(a.position);
+          abox.max.add(a.position);
+          bbox.min.add(b.position);
+          bbox.max.add(b.position);
+
+          const overlapX = (abox.min.x <= bbox.max.x) && (abox.max.x >= bbox.min.x);
+          const overlapY = (abox.min.y <= bbox.max.y) && (abox.max.y >= bbox.min.y);
+          const overlapZ = (abox.min.z <= bbox.max.z) && (abox.max.z >= bbox.min.z);
+
+          return overlapX && overlapY && overlapZ;
+        }
+
+        /********************
+         * 11. UPDATE LOOP (GAME LOGIC)
+         ********************/
+        function update(deltaMs, nowMs) {
+          if (isGameOver) {
+            // allow restart
+            if (keys.r) {
+              resetGame();
+            }
+            return;
+          }
+
+          // Player movement on X axis
+          const moveSpeed = 0.15;
+          if (keys.a) player.position.x -= moveSpeed;
+          if (keys.d) player.position.x += moveSpeed;
+
+          // Keep player inside the "road"
+          if (player.position.x < -5) player.position.x = -5;
+          if (player.position.x >  5) player.position.x =  5;
+
+          // Move obstacles toward camera
+          for (const ob of obstacles) {
+            ob.position.z += speed * deltaMs;
+          }
+
+          // Despawn obstacles that passed behind us
+          obstacles = obstacles.filter(ob => {
+            if (ob.position.z > 20) {
+              scene.remove(ob);
+              return false;
+            }
+            return true;
+          });
+
+          // Spawn logic
+          if (nowMs - lastSpawnTime > spawnInterval) {
+            createObstacle();
+            lastSpawnTime = nowMs;
+
+            // Difficulty ramp
+            if (spawnInterval > 400) spawnInterval -= 10;
+            speed += 0.002;
+          }
+
+          // Collision detection
+          for (const ob of obstacles) {
+            if (isColliding(player, ob)) {
+              isGameOver = true;
+              gameOverBox.innerText =
+                "GAME OVER\nScore: " + Math.floor(score) + "\nPress R to Restart";
+              gameOverBox.style.display = 'block';
+              break;
+            }
+          }
+
+          // Score keeps going up while you're alive
+          score += deltaMs * 0.01;
+
+          // Little spin animation on the player
+          player.rotation.y += 0.05;
+          player.rotation.x += 0.02;
+
+          // Camera follow style
+          camera.position.x = player.position.x * 0.3;
+          camera.position.y = 4;
+          camera.position.z = 10;
+          camera.lookAt(
+            player.position.x,
+            player.position.y + 0.5,
+            player.position.z - 10
+          );
+
+          // HUD text
+          hud.innerText =
+            "Score: " + Math.floor(score) +
+            "\nA / D: Move left/right" +
+            (isGameOver ? "\nPress R to Restart" : "");
+        }
+
+        /********************
+         * 12. RENDER LOOP
+         ********************/
+        let lastTime = performance.now();
+        function gameLoop() {
+          const now = performance.now();
+          const delta = now - lastTime;
+          lastTime = now;
+
+          update(delta, now);
+          renderer.render(scene, camera);
+
+          requestAnimationFrame(gameLoop);
+        }
+
+        // Kick it off
+        resetGame();
+        lastTime = performance.now();
+        hud.innerText = "Score: 0\nA / D: Move left/right";
+        gameLoop();
+
+        /********************
+         * 13. WINDOW RESIZE HANDLER
+         ********************/
+        window.addEventListener('resize', ()=>{
+          camera.aspect = window.innerWidth / window.innerHeight;
+          camera.updateProjectionMatrix();
+          renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+      } catch (err) {
+        // If something throws in our game code, show it on screen
+        errorBox.style.display = 'block';
+        errorBox.textContent =
+          "ERROR (JS crashed):\n" +
+          err.message + "\n" +
+          err.stack;
+        console.error(err);
+      }
+    })();
+  </script>
+</body>
+</html>
